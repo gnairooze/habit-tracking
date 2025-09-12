@@ -1,0 +1,11 @@
+# This file should be copied to local.properties and updated with your paths
+# Flutter SDK path - update this to your Flutter installation directory
+flutter.sdk=C:\\flutter
+
+# Android SDK path - update this to your Android SDK installation directory  
+sdk.dir=C:\\Users\\[USERNAME]\\AppData\\Local\\Android\\sdk
+
+# Instructions:
+# 1. Copy this file to local.properties (remove .template extension)
+# 2. Update the paths above to match your Flutter and Android SDK locations
+# 3. Replace [USERNAME] with your actual Windows username
