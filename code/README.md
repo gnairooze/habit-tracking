@@ -1,83 +1,81 @@
 # Habit Tracking App
 
-A Flutter application for tracking daily habits with notifications and reporting features.
+A Flutter application for tracking daily, weekly, and monthly habits with local storage and notifications.
 
 ## Features
 
 - **Habit Management**: Create, edit, and delete habits
-- **Flexible Scheduling**: Support for daily, weekly, and monthly habits with custom times
-- **Smart Notifications**: Local notifications for habit reminders
-- **Progress Tracking**: Mark habits as done or skipped
-- **Comprehensive Reports**: Search and filter habit completion history
-- **Local Storage**: All data stored locally using SQLite
+- **Flexible Scheduling**: Support for daily, weekly, and monthly habit schedules
+- **Local Notifications**: Get reminded when it's time to perform your habits
+- **Progress Tracking**: View alerts and mark them as done or skipped
+- **Comprehensive Reports**: Search and filter your habit history with completion statistics
+- **Local Storage**: All data is stored locally on your device using SQLite
 
-## Requirements
+## Getting Started
 
-- Flutter SDK 3.13.0 or higher
+### Prerequisites
+
+- Flutter SDK (3.0.0 or higher)
 - Android SDK (for Android builds)
-- Dart 3.1.0 or higher
+- Xcode (for iOS builds, macOS only)
 
-## Installation
+### Installation
 
 1. Clone the repository
-2. Navigate to the project directory
-3. Run `flutter pub get` to install dependencies
-4. Run `flutter run` to launch the app
+2. Navigate to the `code` directory
+3. Copy `android/local.properties.template` to `android/local.properties` and update the paths:
+   ```
+   sdk.dir=YOUR_ANDROID_SDK_PATH
+   flutter.sdk=YOUR_FLUTTER_SDK_PATH
+   ```
+4. Install dependencies:
+   ```bash
+   flutter pub get
+   ```
+5. Run the app:
+   ```bash
+   flutter run
+   ```
 
-## Project Structure
+### Building
 
+#### Android
+```bash
+flutter build apk
 ```
-lib/
-├── main.dart                 # App entry point
-├── models/                   # Data models
-│   ├── habit.dart           # Habit model and schedule types
-│   └── alert.dart           # Alert model and status types
-├── services/                 # Business logic services
-│   ├── database_service.dart # SQLite database operations
-│   └── notification_service.dart # Local notifications
-└── screens/                  # UI screens
-    ├── home_screen.dart     # Main navigation
-    ├── habits_screen.dart   # Habit list and management
-    ├── add_edit_habit_screen.dart # Habit creation/editing
-    ├── alerts_screen.dart   # Alert management
-    └── reports_screen.dart  # Statistics and reporting
+
+#### iOS (macOS only)
+```bash
+flutter build ios
 ```
+
+## App Structure
+
+### Screens
+- **Home Screen**: Navigation hub with bottom navigation bar
+- **Habits Screen**: List, search, add, edit, and delete habits
+- **Alerts Screen**: View pending alerts and mark them as done or skipped
+- **Reports Screen**: View habit history with filtering and statistics
+
+### Data Models
+- **Habit**: Stores habit information including name, description, and schedule
+- **Alert**: Represents scheduled habit reminders with status tracking
+
+### Services
+- **DatabaseService**: SQLite database operations for local data persistence
+- **NotificationService**: Local notification scheduling and management
 
 ## Usage
 
-### Creating Habits
-1. Navigate to the Habits tab
-2. Tap the + button
-3. Enter habit name and description
-4. Configure schedule (daily/weekly/monthly)
-5. Set reminder times
-6. Save the habit
-
-### Managing Alerts
-1. Navigate to the Alerts tab
-2. View pending alerts
-3. Mark alerts as Done or Skip
-4. Filter between pending and all alerts
-
-### Viewing Reports
-1. Navigate to the Reports tab
-2. Use search filters to find specific alerts
-3. View completion statistics
-4. Analyze habit performance over time
+1. **Create a Habit**: Tap the + button on the Habits screen to create a new habit
+2. **Set Schedule**: Choose daily, weekly, or monthly schedule with specific times
+3. **Receive Alerts**: Get notifications when it's time to perform your habit
+4. **Track Progress**: Mark alerts as done or skipped from the Alerts screen
+5. **View Reports**: Check your progress and statistics on the Reports screen
 
 ## Permissions
 
-The app requires the following Android permissions:
-- `SCHEDULE_EXACT_ALARM` - For precise notification scheduling
-- `USE_EXACT_ALARM` - For alarm functionality
-- `RECEIVE_BOOT_COMPLETED` - To reschedule notifications after reboot
-- `VIBRATE` - For notification vibration
-- `WAKE_LOCK` - To wake device for notifications
-
-## Dependencies
-
-- `sqflite`: Local SQLite database
-- `flutter_local_notifications`: Local push notifications
-- `timezone`: Timezone handling for notifications
-- `intl`: Date and time formatting
-- `path`: File path utilities
+The app requires the following permissions:
+- **Notifications**: To send habit reminders
+- **Exact Alarms**: To schedule precise notification timing
+- **Boot Completed**: To reschedule notifications after device restart

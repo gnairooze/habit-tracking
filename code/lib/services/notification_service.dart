@@ -1,100 +1,167 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/data/latest.dart' as tz;
+import 'package:flutter/foundation.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../models/habit.dart';
 import '../models/alert.dart';
 import 'database_service.dart';
 
 class NotificationService {
-  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
+  static final NotificationService instance = NotificationService._internal();
+  final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  static Future<void> initialize() async {
-    tz.initializeTimeZones();
+  NotificationService._internal();
 
+  Future<void> initialize() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-
-    await _notificationsPlugin.initialize(
-      initializationSettings,
-      onDidReceiveNotificationResponse: _onNotificationTap,
+    const DarwinInitializationSettings initializationSettingsDarwin =
+        DarwinInitializationSettings(
+      requestSoundPermission: true,
+      requestBadgePermission: true,
+      requestAlertPermission: true,
     );
+
+    const InitializationSettings initializationSettings =
+        InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsDarwin,
+      macOS: initializationSettingsDarwin,
+    );
+
+    await _flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: _onDidReceiveNotificationResponse,
+    );
+
+    // Request permissions for notifications
+    await _requestPermissions();
   }
 
-  static void _onNotificationTap(NotificationResponse notificationResponse) {
-    // Handle notification tap - navigate to alert screen
-    // This will be handled by the main app navigation
+  Future<void> _requestPermissions() async {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+          _flutterLocalNotificationsPlugin
+              .resolvePlatformSpecificImplementation<
+                  AndroidFlutterLocalNotificationsPlugin>();
+
+      await androidImplementation?.requestNotificationsPermission();
+    } else if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      final IOSFlutterLocalNotificationsPlugin? iosImplementation =
+          _flutterLocalNotificationsPlugin
+              .resolvePlatformSpecificImplementation<
+                  IOSFlutterLocalNotificationsPlugin>();
+
+      await iosImplementation?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    }
   }
 
-  static Future<void> scheduleHabitNotifications(Habit habit) async {
-    if (!habit.alertEnabled) return;
+  Future<void> _onDidReceiveNotificationResponse(
+      NotificationResponse notificationResponse) async {
+    final String? payload = notificationResponse.payload;
+    if (payload != null) {
+      // Handle notification tap - could navigate to alert screen
+      debugPrint('Notification payload: $payload');
+    }
+  }
 
+  Future<void> scheduleHabitNotifications(Habit habit) async {
     // Cancel existing notifications for this habit
     await cancelHabitNotifications(habit.id!);
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    // Schedule notifications for the next 30 days
+    // Generate alerts for the next 30 days
     for (int dayOffset = 0; dayOffset < 30; dayOffset++) {
-      final date = today.add(Duration(days: dayOffset));
-      
-      if (_shouldScheduleForDate(habit.schedule, date)) {
-        for (final time in habit.schedule.times) {
-          final scheduledDateTime = DateTime(
-            date.year,
-            date.month,
-            date.day,
-            time.hour,
-            time.minute,
+      final targetDate = today.add(Duration(days: dayOffset));
+      final scheduledTimes =
+          _getScheduledTimesForDate(habit.schedule, targetDate);
+
+      for (final timeString in scheduledTimes) {
+        final timeParts = timeString.split(':');
+        final hour = int.parse(timeParts[0]);
+        final minute = int.parse(timeParts[1]);
+
+        final scheduledDateTime = DateTime(
+          targetDate.year,
+          targetDate.month,
+          targetDate.day,
+          hour,
+          minute,
+        );
+
+        // Only schedule future notifications
+        if (scheduledDateTime.isAfter(now)) {
+          // Create alert in database
+          final alert = Alert(
+            habitId: habit.id!,
+            habitName: habit.name,
+            habitDescription: habit.description,
+            scheduledDateTime: scheduledDateTime,
+            createdAt: now,
           );
 
-          // Only schedule future notifications
-          if (scheduledDateTime.isAfter(now)) {
-            await _scheduleNotification(
-              habit,
-              scheduledDateTime,
-              dayOffset * 100 + habit.schedule.times.indexOf(time),
-            );
+          final alertId = await DatabaseService.instance.insertAlert(alert);
 
-            // Create alert record in database
-            final alert = Alert(
-              habitId: habit.id!,
-              habitName: habit.name,
-              habitDescription: habit.description,
-              scheduledDateTime: scheduledDateTime,
-            );
-            await DatabaseService.insertAlert(alert);
-          }
+          // Schedule notification
+          await _scheduleNotification(
+            alertId,
+            habit.name,
+            habit.description,
+            scheduledDateTime,
+          );
         }
       }
     }
   }
 
-  static bool _shouldScheduleForDate(HabitSchedule schedule, DateTime date) {
+  List<String> _getScheduledTimesForDate(
+      HabitSchedule schedule, DateTime date) {
     switch (schedule.type) {
       case ScheduleType.daily:
-        return true;
+        return schedule.times;
+
       case ScheduleType.weekly:
-        if (schedule.selectedDays != null) {
-          return schedule.selectedDays!.contains(date.weekday);
+        final dayName = _getDayName(date.weekday);
+        if (schedule.days?.contains(dayName) == true) {
+          return schedule.times;
         }
-        return true;
+        return [];
+
       case ScheduleType.monthly:
-        if (schedule.selectedDays != null) {
-          return schedule.selectedDays!.contains(date.day);
+        final dayNumber = date.day.toString();
+        if (schedule.days?.contains(dayNumber) == true) {
+          return schedule.times;
         }
-        return true;
+        return [];
     }
   }
 
-  static Future<void> _scheduleNotification(
-    Habit habit,
+  String _getDayName(int weekday) {
+    const dayNames = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
+    return dayNames[weekday - 1];
+  }
+
+  Future<void> _scheduleNotification(
+    int id,
+    String title,
+    String body,
     DateTime scheduledDateTime,
-    int notificationId,
   ) async {
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
@@ -103,31 +170,52 @@ class NotificationService {
       channelDescription: 'Notifications for habit reminders',
       importance: Importance.high,
       priority: Priority.high,
-      showWhen: false,
     );
 
-    const NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
+    const DarwinNotificationDetails iOSPlatformChannelSpecifics =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
 
-    await _notificationsPlugin.zonedSchedule(
-      notificationId,
-      'Habit Reminder: ${habit.name}',
-      habit.description,
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+      iOS: iOSPlatformChannelSpecifics,
+      macOS: iOSPlatformChannelSpecifics,
+    );
+
+    await _flutterLocalNotificationsPlugin.zonedSchedule(
+      id,
+      title,
+      body,
       tz.TZDateTime.from(scheduledDateTime, tz.local),
       platformChannelSpecifics,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      payload: id.toString(),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
-      payload: habit.id.toString(),
     );
   }
 
-  static Future<void> cancelHabitNotifications(int habitId) async {
-    // This is a simplified approach - in a real app you'd want to track notification IDs
-    await _notificationsPlugin.cancelAll();
+  Future<void> cancelHabitNotifications(int habitId) async {
+    // Get all alerts for this habit
+    final alerts = await DatabaseService.instance.getAlerts();
+    final habitAlerts = alerts.where((alert) => alert.habitId == habitId);
+
+    // Cancel notifications and delete alerts
+    for (final alert in habitAlerts) {
+      if (alert.id != null) {
+        await _flutterLocalNotificationsPlugin.cancel(alert.id!);
+        await DatabaseService.instance.deleteAlert(alert.id!);
+      }
+    }
   }
 
-  static Future<void> cancelAllNotifications() async {
-    await _notificationsPlugin.cancelAll();
+  Future<void> cancelNotification(int id) async {
+    await _flutterLocalNotificationsPlugin.cancel(id);
+  }
+
+  Future<void> cancelAllNotifications() async {
+    await _flutterLocalNotificationsPlugin.cancelAll();
   }
 }

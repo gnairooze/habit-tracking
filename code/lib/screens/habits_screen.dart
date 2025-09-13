@@ -13,54 +13,28 @@ class HabitsScreen extends StatefulWidget {
 
 class _HabitsScreenState extends State<HabitsScreen> {
   List<Habit> _habits = [];
-  List<Habit> _filteredHabits = [];
-  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
     _loadHabits();
-    _searchController.addListener(_filterHabits);
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadHabits() async {
     setState(() => _isLoading = true);
-    try {
-      final habits = await DatabaseService.getHabits();
-      setState(() {
-        _habits = habits;
-        _filteredHabits = habits;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading habits: $e')),
-        );
-      }
-    }
-  }
-
-  void _filterHabits() {
-    final query = _searchController.text.toLowerCase();
+    final habits = await DatabaseService.instance.getHabits(
+      searchQuery: _searchQuery.isEmpty ? null : _searchQuery,
+    );
     setState(() {
-      _filteredHabits = _habits.where((habit) {
-        return habit.name.toLowerCase().contains(query) ||
-               habit.description.toLowerCase().contains(query);
-      }).toList();
+      _habits = habits;
+      _isLoading = false;
     });
   }
 
   Future<void> _deleteHabit(Habit habit) async {
-    final confirmed = await showDialog<bool>(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Habit'),
@@ -78,23 +52,29 @@ class _HabitsScreenState extends State<HabitsScreen> {
       ),
     );
 
-    if (confirmed == true) {
-      try {
-        await DatabaseService.deleteHabit(habit.id!);
-        await NotificationService.cancelHabitNotifications(habit.id!);
-        _loadHabits();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Habit deleted successfully')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error deleting habit: $e')),
-          );
-        }
+    if (confirm == true) {
+      await DatabaseService.instance.deleteHabit(habit.id!);
+      await NotificationService.instance.cancelHabitNotifications(habit.id!);
+      await _loadHabits();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Habit "${habit.name}" deleted')),
+        );
       }
+    }
+  }
+
+  String _getScheduleDescription(HabitSchedule schedule) {
+    switch (schedule.type) {
+      case ScheduleType.daily:
+        return 'Daily at ${schedule.times.join(', ')}';
+      case ScheduleType.weekly:
+        final days = schedule.days?.join(', ') ?? '';
+        return 'Weekly on $days at ${schedule.times.join(', ')}';
+      case ScheduleType.monthly:
+        final days = schedule.days?.join(', ') ?? '';
+        return 'Monthly on day(s) $days at ${schedule.times.join(', ')}';
     }
   }
 
@@ -102,7 +82,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Habits'),
+        title: const Text('Habits'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Column(
@@ -110,19 +90,21 @@ class _HabitsScreenState extends State<HabitsScreen> {
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: TextField(
-              controller: _searchController,
               decoration: const InputDecoration(
-                labelText: 'Search habits',
-                hintText: 'Search by name or description',
+                hintText: 'Search habits...',
                 prefixIcon: Icon(Icons.search),
                 border: OutlineInputBorder(),
               ),
+              onChanged: (value) {
+                setState(() => _searchQuery = value);
+                _loadHabits();
+              },
             ),
           ),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _filteredHabits.isEmpty
+                : _habits.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -134,11 +116,17 @@ class _HabitsScreenState extends State<HabitsScreen> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              _searchController.text.isEmpty
-                                  ? 'No habits yet. Add your first habit!'
-                                  : 'No habits found matching your search.',
-                              style: Theme.of(context).textTheme.titleMedium,
-                              textAlign: TextAlign.center,
+                              _searchQuery.isEmpty
+                                  ? 'No habits yet'
+                                  : 'No habits found',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _searchQuery.isEmpty
+                                  ? 'Tap the + button to create your first habit'
+                                  : 'Try adjusting your search',
+                              style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
                         ),
@@ -146,67 +134,63 @@ class _HabitsScreenState extends State<HabitsScreen> {
                     : RefreshIndicator(
                         onRefresh: _loadHabits,
                         child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: _filteredHabits.length,
+                          itemCount: _habits.length,
                           itemBuilder: (context, index) {
-                            final habit = _filteredHabits[index];
+                            final habit = _habits[index];
                             return Card(
-                              margin: const EdgeInsets.only(bottom: 12),
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 4,
+                              ),
                               child: ListTile(
                                 title: Text(
                                   habit.name,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                                 subtitle: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const SizedBox(height: 4),
                                     Text(habit.description),
                                     const SizedBox(height: 4),
                                     Text(
                                       _getScheduleDescription(habit.schedule),
                                       style: TextStyle(
-                                        color: Theme.of(context).primaryColor,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
                                         fontSize: 12,
                                       ),
                                     ),
                                   ],
                                 ),
-                                trailing: PopupMenuButton<String>(
-                                  onSelected: (value) {
-                                    if (value == 'edit') {
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute(
-                                          builder: (context) => AddEditHabitScreen(habit: habit),
-                                        ),
-                                      ).then((_) => _loadHabits());
-                                    } else if (value == 'delete') {
-                                      _deleteHabit(habit);
-                                    }
-                                  },
-                                  itemBuilder: (context) => [
-                                    const PopupMenuItem(
-                                      value: 'edit',
-                                      child: Text('Edit'),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.edit),
+                                      onPressed: () async {
+                                        final result = await Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                AddEditHabitScreen(
+                                                    habit: habit),
+                                          ),
+                                        );
+                                        if (result == true) {
+                                          await _loadHabits();
+                                        }
+                                      },
                                     ),
-                                    const PopupMenuItem(
-                                      value: 'delete',
-                                      child: Text('Delete'),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete),
+                                      onPressed: () => _deleteHabit(habit),
                                     ),
                                   ],
                                 ),
-                                leading: CircleAvatar(
-                                  backgroundColor: habit.alertEnabled
-                                      ? Colors.green
-                                      : Colors.grey,
-                                  child: Icon(
-                                    habit.alertEnabled
-                                        ? Icons.notifications_active
-                                        : Icons.notifications_off,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                ),
+                                isThreeLine: true,
                               ),
                             );
                           },
@@ -216,33 +200,19 @@ class _HabitsScreenState extends State<HabitsScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context).push(
+        onPressed: () async {
+          final result = await Navigator.push(
+            context,
             MaterialPageRoute(
               builder: (context) => const AddEditHabitScreen(),
             ),
-          ).then((_) => _loadHabits());
+          );
+          if (result == true) {
+            await _loadHabits();
+          }
         },
         child: const Icon(Icons.add),
       ),
     );
-  }
-
-  String _getScheduleDescription(HabitSchedule schedule) {
-    String frequency = '';
-    switch (schedule.type) {
-      case ScheduleType.daily:
-        frequency = 'Daily';
-        break;
-      case ScheduleType.weekly:
-        frequency = 'Weekly';
-        break;
-      case ScheduleType.monthly:
-        frequency = 'Monthly';
-        break;
-    }
-    
-    final times = schedule.times.map((t) => t.formatted).join(', ');
-    return '$frequency • ${schedule.occurrencesPerPeriod}x • $times';
   }
 }

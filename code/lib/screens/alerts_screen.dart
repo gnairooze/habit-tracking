@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/alert.dart';
 import '../services/database_service.dart';
+import '../services/notification_service.dart';
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({super.key});
@@ -11,128 +12,82 @@ class AlertsScreen extends StatefulWidget {
 }
 
 class _AlertsScreenState extends State<AlertsScreen> {
-  List<Alert> _alerts = [];
+  List<Alert> _pendingAlerts = [];
   bool _isLoading = true;
-  bool _showPendingOnly = true;
 
   @override
   void initState() {
     super.initState();
-    _loadAlerts();
+    _loadPendingAlerts();
   }
 
-  Future<void> _loadAlerts() async {
+  Future<void> _loadPendingAlerts() async {
     setState(() => _isLoading = true);
-    try {
-      final alerts = _showPendingOnly 
-          ? await DatabaseService.getPendingAlerts()
-          : await DatabaseService.getAlerts();
-      setState(() {
-        _alerts = alerts;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading alerts: $e')),
-        );
-      }
-    }
+    final alerts = await DatabaseService.instance.getPendingAlerts();
+    setState(() {
+      _pendingAlerts = alerts;
+      _isLoading = false;
+    });
   }
 
-  Future<void> _updateAlertStatus(Alert alert, AlertStatus status) async {
-    try {
-      final updatedAlert = alert.copyWith(
-        status: status,
-        completedDateTime: status != AlertStatus.pending ? DateTime.now() : null,
-      );
-      await DatabaseService.updateAlert(updatedAlert);
-      _loadAlerts();
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              status == AlertStatus.done 
-                  ? 'Habit marked as done!' 
-                  : 'Habit skipped',
-            ),
-            backgroundColor: status == AlertStatus.done 
-                ? Colors.green 
-                : Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating alert: $e')),
-        );
-      }
-    }
-  }
-
-  void _showAlertDialog(Alert alert) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(alert.habitName),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              alert.habitDescription,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Scheduled: ${DateFormat('MMM dd, yyyy - hh:mm a').format(alert.scheduledDateTime)}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _updateAlertStatus(alert, AlertStatus.skipped);
-            },
-            child: const Text('SKIP'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _updateAlertStatus(alert, AlertStatus.done);
-            },
-            child: const Text('DONE'),
-          ),
-        ],
-      ),
+  Future<void> _markAsDone(Alert alert) async {
+    final updatedAlert = alert.copyWith(
+      status: AlertStatus.done,
+      completedAt: DateTime.now(),
     );
-  }
 
-  Color _getStatusColor(AlertStatus status) {
-    switch (status) {
-      case AlertStatus.pending:
-        return Colors.blue;
-      case AlertStatus.done:
-        return Colors.green;
-      case AlertStatus.skipped:
-        return Colors.orange;
+    await DatabaseService.instance.updateAlert(updatedAlert);
+    await NotificationService.instance.cancelNotification(alert.id!);
+    await _loadPendingAlerts();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Marked "${alert.habitName}" as done!'),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
-  IconData _getStatusIcon(AlertStatus status) {
-    switch (status) {
-      case AlertStatus.pending:
-        return Icons.schedule;
-      case AlertStatus.done:
-        return Icons.check_circle;
-      case AlertStatus.skipped:
-        return Icons.skip_next;
+  Future<void> _markAsSkipped(Alert alert) async {
+    final updatedAlert = alert.copyWith(
+      status: AlertStatus.skipped,
+      completedAt: DateTime.now(),
+    );
+
+    await DatabaseService.instance.updateAlert(updatedAlert);
+    await NotificationService.instance.cancelNotification(alert.id!);
+    await _loadPendingAlerts();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Skipped "${alert.habitName}"'),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
+  }
+
+  String _formatDateTime(DateTime dateTime) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final alertDate = DateTime(dateTime.year, dateTime.month, dateTime.day);
+
+    if (alertDate == today) {
+      return 'Today at ${DateFormat.jm().format(dateTime)}';
+    } else if (alertDate == today.subtract(const Duration(days: 1))) {
+      return 'Yesterday at ${DateFormat.jm().format(dateTime)}';
+    } else if (alertDate == today.add(const Duration(days: 1))) {
+      return 'Tomorrow at ${DateFormat.jm().format(dateTime)}';
+    } else {
+      return DateFormat('MMM d, y \'at\' h:mm a').format(dateTime);
+    }
+  }
+
+  bool _isOverdue(DateTime scheduledDateTime) {
+    return scheduledDateTime.isBefore(DateTime.now());
   }
 
   @override
@@ -141,49 +96,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
       appBar: AppBar(
         title: const Text('Alerts'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          PopupMenuButton<bool>(
-            icon: const Icon(Icons.filter_list),
-            onSelected: (showPendingOnly) {
-              setState(() {
-                _showPendingOnly = showPendingOnly;
-              });
-              _loadAlerts();
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: true,
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.schedule,
-                      color: _showPendingOnly ? Theme.of(context).primaryColor : null,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Pending Only'),
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: false,
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.list,
-                      color: !_showPendingOnly ? Theme.of(context).primaryColor : null,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('All Alerts'),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _alerts.isEmpty
+          : _pendingAlerts.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -195,92 +111,127 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        _showPendingOnly 
-                            ? 'No pending alerts' 
-                            : 'No alerts found',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        'No pending alerts',
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _showPendingOnly
-                            ? 'Great job! You\'re all caught up.'
-                            : 'Create some habits to see alerts here.',
+                        'All caught up! Great job!',
                         style: Theme.of(context).textTheme.bodyMedium,
-                        textAlign: TextAlign.center,
                       ),
                     ],
                   ),
                 )
               : RefreshIndicator(
-                  onRefresh: _loadAlerts,
+                  onRefresh: _loadPendingAlerts,
                   child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _alerts.length,
+                    itemCount: _pendingAlerts.length,
                     itemBuilder: (context, index) {
-                      final alert = _alerts[index];
-                      final isOverdue = alert.status == AlertStatus.pending &&
-                          alert.scheduledDateTime.isBefore(DateTime.now());
-                      
+                      final alert = _pendingAlerts[index];
+                      final isOverdue = _isOverdue(alert.scheduledDateTime);
+
                       return Card(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        color: isOverdue ? Colors.red[50] : null,
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: _getStatusColor(alert.status),
-                            child: Icon(
-                              _getStatusIcon(alert.status),
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                          title: Text(
-                            alert.habitName,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Column(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        color: isOverdue ? Colors.red.shade50 : null,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const SizedBox(height: 4),
-                              Text(alert.habitDescription),
-                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      alert.habitName,
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isOverdue)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: const Text(
+                                        'OVERDUE',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
                               Text(
-                                DateFormat('MMM dd, yyyy - hh:mm a')
-                                    .format(alert.scheduledDateTime),
+                                alert.habitDescription,
                                 style: TextStyle(
-                                  color: isOverdue ? Colors.red : Colors.grey[600],
-                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                  fontSize: 14,
                                 ),
                               ),
-                              if (alert.completedDateTime != null)
-                                Text(
-                                  'Completed: ${DateFormat('MMM dd - hh:mm a').format(alert.completedDateTime!)}',
-                                  style: TextStyle(
-                                    color: Colors.grey[600],
-                                    fontSize: 12,
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.schedule,
+                                    size: 16,
+                                    color: isOverdue
+                                        ? Colors.red
+                                        : Colors.grey[600],
                                   ),
-                                ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _formatDateTime(alert.scheduledDateTime),
+                                    style: TextStyle(
+                                      color: isOverdue
+                                          ? Colors.red
+                                          : Colors.grey[600],
+                                      fontSize: 12,
+                                      fontWeight: isOverdue
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton.icon(
+                                    onPressed: () => _markAsSkipped(alert),
+                                    icon: const Icon(Icons.skip_next),
+                                    label: const Text('Skip'),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.orange,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton.icon(
+                                    onPressed: () => _markAsDone(alert),
+                                    icon: const Icon(Icons.check),
+                                    label: const Text('Done'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
-                          trailing: alert.status == AlertStatus.pending
-                              ? Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      onPressed: () => _updateAlertStatus(alert, AlertStatus.skipped),
-                                      icon: const Icon(Icons.skip_next),
-                                      color: Colors.orange,
-                                    ),
-                                    IconButton(
-                                      onPressed: () => _updateAlertStatus(alert, AlertStatus.done),
-                                      icon: const Icon(Icons.check),
-                                      color: Colors.green,
-                                    ),
-                                  ],
-                                )
-                              : null,
-                          onTap: alert.status == AlertStatus.pending
-                              ? () => _showAlertDialog(alert)
-                              : null,
                         ),
                       );
                     },

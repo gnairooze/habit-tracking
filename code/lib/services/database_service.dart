@@ -1,197 +1,236 @@
+import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/habit.dart';
 import '../models/alert.dart';
 
 class DatabaseService {
+  static final DatabaseService instance = DatabaseService._internal();
   static Database? _database;
-  static const String _databaseName = 'habit_tracking.db';
-  static const int _databaseVersion = 1;
 
-  static const String _habitsTable = 'habits';
-  static const String _alertsTable = 'alerts';
+  DatabaseService._internal();
 
-  static Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDatabase();
+  Future<Database> get database async {
+    _database ??= await _initDatabase();
     return _database!;
   }
 
-  static Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), _databaseName);
+  Future<Database> _initDatabase() async {
+    final databasesPath = await getDatabasesPath();
+    final path = join(databasesPath, 'habit_tracking.db');
+
     return await openDatabase(
       path,
-      version: _databaseVersion,
+      version: 1,
       onCreate: _onCreate,
     );
   }
 
-  static Future<void> _onCreate(Database db, int version) async {
+  Future<void> _onCreate(Database db, int version) async {
+    // Create habits table
     await db.execute('''
-      CREATE TABLE $_habitsTable(
+      CREATE TABLE habits (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         description TEXT NOT NULL,
         schedule_type TEXT NOT NULL,
-        occurrences_per_period INTEGER NOT NULL,
-        selected_days TEXT,
-        times TEXT NOT NULL,
-        alert_enabled INTEGER NOT NULL DEFAULT 1
+        schedule_frequency INTEGER NOT NULL,
+        schedule_times TEXT NOT NULL,
+        schedule_days TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       )
     ''');
 
+    // Create alerts table
     await db.execute('''
-      CREATE TABLE $_alertsTable(
+      CREATE TABLE alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         habit_id INTEGER NOT NULL,
         habit_name TEXT NOT NULL,
         habit_description TEXT NOT NULL,
         scheduled_date_time INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        completed_date_time INTEGER,
-        FOREIGN KEY (habit_id) REFERENCES $_habitsTable (id) ON DELETE CASCADE
+        status TEXT NOT NULL DEFAULT 'AlertStatus.pending',
+        completed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE
       )
     ''');
+
+    // Create indexes for better performance
+    await db.execute('CREATE INDEX idx_habits_name ON habits(name)');
+    await db.execute('CREATE INDEX idx_alerts_habit_id ON alerts(habit_id)');
+    await db.execute(
+        'CREATE INDEX idx_alerts_scheduled_date ON alerts(scheduled_date_time)');
+    await db.execute('CREATE INDEX idx_alerts_status ON alerts(status)');
   }
 
   // Habit CRUD operations
-  static Future<int> insertHabit(Habit habit) async {
+  Future<int> insertHabit(Habit habit) async {
     final db = await database;
-    return await db.insert(_habitsTable, habit.toMap());
+    return await db.insert('habits', habit.toMap());
   }
 
-  static Future<List<Habit>> getHabits() async {
+  Future<List<Habit>> getHabits({String? searchQuery}) async {
     final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query(_habitsTable);
+    List<Map<String, dynamic>> maps;
+
+    if (searchQuery != null && searchQuery.isNotEmpty) {
+      maps = await db.query(
+        'habits',
+        where: 'name LIKE ? OR description LIKE ?',
+        whereArgs: ['%$searchQuery%', '%$searchQuery%'],
+        orderBy: 'updated_at DESC',
+      );
+    } else {
+      maps = await db.query('habits', orderBy: 'updated_at DESC');
+    }
+
     return List.generate(maps.length, (i) => Habit.fromMap(maps[i]));
   }
 
-  static Future<Habit?> getHabit(int id) async {
+  Future<Habit?> getHabit(int id) async {
     final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query(
-      _habitsTable,
+    final maps = await db.query(
+      'habits',
       where: 'id = ?',
       whereArgs: [id],
     );
+
     if (maps.isNotEmpty) {
       return Habit.fromMap(maps.first);
     }
     return null;
   }
 
-  static Future<List<Habit>> searchHabits(String query) async {
-    final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query(
-      _habitsTable,
-      where: 'name LIKE ? OR description LIKE ?',
-      whereArgs: ['%$query%', '%$query%'],
-    );
-    return List.generate(maps.length, (i) => Habit.fromMap(maps[i]));
-  }
-
-  static Future<int> updateHabit(Habit habit) async {
+  Future<int> updateHabit(Habit habit) async {
     final db = await database;
     return await db.update(
-      _habitsTable,
+      'habits',
       habit.toMap(),
       where: 'id = ?',
       whereArgs: [habit.id],
     );
   }
 
-  static Future<int> deleteHabit(int id) async {
+  Future<int> deleteHabit(int id) async {
     final db = await database;
-    // Delete associated alerts first
-    await db.delete(_alertsTable, where: 'habit_id = ?', whereArgs: [id]);
-    return await db.delete(_habitsTable, where: 'id = ?', whereArgs: [id]);
+    return await db.delete(
+      'habits',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   // Alert CRUD operations
-  static Future<int> insertAlert(Alert alert) async {
+  Future<int> insertAlert(Alert alert) async {
     final db = await database;
-    return await db.insert(_alertsTable, alert.toMap());
+    return await db.insert('alerts', alert.toMap());
   }
 
-  static Future<List<Alert>> getAlerts() async {
-    final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query(
-      _alertsTable,
-      orderBy: 'scheduled_date_time ASC',
-    );
-    return List.generate(maps.length, (i) => Alert.fromMap(maps[i]));
-  }
-
-  static Future<List<Alert>> getPendingAlerts() async {
-    final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query(
-      _alertsTable,
-      where: 'status = ?',
-      whereArgs: ['pending'],
-      orderBy: 'scheduled_date_time ASC',
-    );
-    return List.generate(maps.length, (i) => Alert.fromMap(maps[i]));
-  }
-
-  static Future<List<Alert>> searchAlerts({
+  Future<List<Alert>> getAlerts({
+    String? searchQuery,
     DateTime? fromDate,
     DateTime? toDate,
     String? habitName,
-    String? habitDescription,
   }) async {
     final db = await database;
     String whereClause = '';
     List<dynamic> whereArgs = [];
 
+    List<String> conditions = [];
+
+    if (searchQuery != null && searchQuery.isNotEmpty) {
+      conditions.add('(habit_name LIKE ? OR habit_description LIKE ?)');
+      whereArgs.addAll(['%$searchQuery%', '%$searchQuery%']);
+    }
+
     if (fromDate != null) {
-      whereClause += 'scheduled_date_time >= ?';
+      conditions.add('scheduled_date_time >= ?');
       whereArgs.add(fromDate.millisecondsSinceEpoch);
     }
 
     if (toDate != null) {
-      if (whereClause.isNotEmpty) whereClause += ' AND ';
-      whereClause += 'scheduled_date_time <= ?';
+      conditions.add('scheduled_date_time <= ?');
       whereArgs.add(toDate.millisecondsSinceEpoch);
     }
 
     if (habitName != null && habitName.isNotEmpty) {
-      if (whereClause.isNotEmpty) whereClause += ' AND ';
-      whereClause += 'habit_name LIKE ?';
+      conditions.add('habit_name LIKE ?');
       whereArgs.add('%$habitName%');
     }
 
-    if (habitDescription != null && habitDescription.isNotEmpty) {
-      if (whereClause.isNotEmpty) whereClause += ' AND ';
-      whereClause += 'habit_description LIKE ?';
-      whereArgs.add('%$habitDescription%');
+    if (conditions.isNotEmpty) {
+      whereClause = conditions.join(' AND ');
     }
 
-    final List<Map<String, dynamic>> maps = await db.query(
-      _alertsTable,
-      where: whereClause.isEmpty ? null : whereClause,
-      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+    final maps = await db.query(
+      'alerts',
+      where: whereClause.isNotEmpty ? whereClause : null,
+      whereArgs: whereArgs.isNotEmpty ? whereArgs : null,
       orderBy: 'scheduled_date_time DESC',
     );
 
     return List.generate(maps.length, (i) => Alert.fromMap(maps[i]));
   }
 
-  static Future<int> updateAlert(Alert alert) async {
+  Future<List<Alert>> getPendingAlerts() async {
+    final db = await database;
+    final maps = await db.query(
+      'alerts',
+      where: 'status = ? AND scheduled_date_time <= ?',
+      whereArgs: ['AlertStatus.pending', DateTime.now().millisecondsSinceEpoch],
+      orderBy: 'scheduled_date_time ASC',
+    );
+
+    return List.generate(maps.length, (i) => Alert.fromMap(maps[i]));
+  }
+
+  Future<Alert?> getAlert(int id) async {
+    final db = await database;
+    final maps = await db.query(
+      'alerts',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    if (maps.isNotEmpty) {
+      return Alert.fromMap(maps.first);
+    }
+    return null;
+  }
+
+  Future<int> updateAlert(Alert alert) async {
     final db = await database;
     return await db.update(
-      _alertsTable,
+      'alerts',
       alert.toMap(),
       where: 'id = ?',
       whereArgs: [alert.id],
     );
   }
 
-  static Future<int> deleteAlert(int id) async {
+  Future<int> deleteAlert(int id) async {
     final db = await database;
-    return await db.delete(_alertsTable, where: 'id = ?', whereArgs: [id]);
+    return await db.delete(
+      'alerts',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
-  static Future<void> close() async {
+  Future<int> deleteAlertsForHabit(int habitId) async {
     final db = await database;
-    db.close();
+    return await db.delete(
+      'alerts',
+      where: 'habit_id = ?',
+      whereArgs: [habitId],
+    );
+  }
+
+  Future<void> close() async {
+    final db = await database;
+    await db.close();
   }
 }

@@ -16,33 +16,57 @@ class _AddEditHabitScreenState extends State<AddEditHabitScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
-  
+
   ScheduleType _scheduleType = ScheduleType.daily;
-  int _occurrences = 1;
-  List<int> _selectedDays = [];
+  int _frequency = 1;
   List<TimeOfDay> _times = [const TimeOfDay(hour: 9, minute: 0)];
-  bool _alertEnabled = true;
+  List<String> _selectedDays = [];
+  List<int> _selectedMonthDays = [];
+
+  final List<String> _weekDays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday'
+  ];
+
   bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.habit != null) {
-      _nameController.text = widget.habit!.name;
-      _descriptionController.text = widget.habit!.description;
-      _scheduleType = widget.habit!.schedule.type;
-      _occurrences = widget.habit!.schedule.occurrencesPerPeriod;
-      _selectedDays = widget.habit!.schedule.selectedDays ?? [];
-      _times = List.from(widget.habit!.schedule.times);
-      _alertEnabled = widget.habit!.alertEnabled;
+      _populateFields();
     }
   }
 
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
+  void _populateFields() {
+    final habit = widget.habit!;
+    _nameController.text = habit.name;
+    _descriptionController.text = habit.description;
+    _scheduleType = habit.schedule.type;
+    _frequency = habit.schedule.frequency;
+
+    // Parse times
+    _times = habit.schedule.times.map((timeString) {
+      final parts = timeString.split(':');
+      return TimeOfDay(
+        hour: int.parse(parts[0]),
+        minute: int.parse(parts[1]),
+      );
+    }).toList();
+
+    // Parse days
+    if (habit.schedule.days != null) {
+      if (_scheduleType == ScheduleType.weekly) {
+        _selectedDays = List.from(habit.schedule.days!);
+      } else if (_scheduleType == ScheduleType.monthly) {
+        _selectedMonthDays = habit.schedule.days!.map(int.parse).toList();
+      }
+    }
   }
 
   Future<void> _saveHabit() async {
@@ -51,53 +75,60 @@ class _AddEditHabitScreenState extends State<AddEditHabitScreen> {
     setState(() => _isLoading = true);
 
     try {
+      final now = DateTime.now();
       final schedule = HabitSchedule(
         type: _scheduleType,
-        occurrencesPerPeriod: _occurrences,
-        selectedDays: _selectedDays.isEmpty ? null : _selectedDays,
-        times: _times,
+        frequency: _frequency,
+        times: _times
+            .map((time) =>
+                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}')
+            .toList(),
+        days: _scheduleType == ScheduleType.daily
+            ? null
+            : _scheduleType == ScheduleType.weekly
+                ? _selectedDays
+                : _selectedMonthDays.map((day) => day.toString()).toList(),
       );
 
-      final habit = Habit(
-        id: widget.habit?.id,
-        name: _nameController.text.trim(),
-        description: _descriptionController.text.trim(),
-        schedule: schedule,
-        alertEnabled: _alertEnabled,
-      );
+      final habit = widget.habit?.copyWith(
+            name: _nameController.text.trim(),
+            description: _descriptionController.text.trim(),
+            schedule: schedule,
+            updatedAt: now,
+          ) ??
+          Habit(
+            name: _nameController.text.trim(),
+            description: _descriptionController.text.trim(),
+            schedule: schedule,
+            createdAt: now,
+            updatedAt: now,
+          );
 
+      int habitId;
       if (widget.habit == null) {
-        final id = await DatabaseService.insertHabit(habit);
-        final savedHabit = habit.copyWith(id: id);
-        if (_alertEnabled) {
-          await NotificationService.scheduleHabitNotifications(savedHabit);
-        }
+        habitId = await DatabaseService.instance.insertHabit(habit);
       } else {
-        await DatabaseService.updateHabit(habit);
-        if (_alertEnabled) {
-          await NotificationService.scheduleHabitNotifications(habit);
-        } else {
-          await NotificationService.cancelHabitNotifications(habit.id!);
-        }
+        await DatabaseService.instance.updateHabit(habit);
+        habitId = habit.id!;
+        // Cancel existing notifications
+        await NotificationService.instance.cancelHabitNotifications(habitId);
       }
+
+      // Schedule new notifications
+      final savedHabit = habit.copyWith(id: habitId);
+      await NotificationService.instance.scheduleHabitNotifications(savedHabit);
 
       if (mounted) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(widget.habit == null 
-                ? 'Habit created successfully' 
-                : 'Habit updated successfully'),
-          ),
-        );
+        Navigator.of(context).pop(true);
       }
     } catch (e) {
-      setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error saving habit: $e')),
         );
       }
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
@@ -127,26 +158,160 @@ class _AddEditHabitScreenState extends State<AddEditHabitScreen> {
     }
   }
 
+  Widget _buildScheduleSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Schedule',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+
+            // Schedule Type
+            DropdownButtonFormField<ScheduleType>(
+              value: _scheduleType,
+              decoration: const InputDecoration(
+                labelText: 'Schedule Type',
+                border: OutlineInputBorder(),
+              ),
+              items: ScheduleType.values.map((type) {
+                return DropdownMenuItem(
+                  value: type,
+                  child: Text(type.name.toUpperCase()),
+                );
+              }).toList(),
+              onChanged: (ScheduleType? value) {
+                if (value != null) {
+                  setState(() {
+                    _scheduleType = value;
+                    _selectedDays.clear();
+                    _selectedMonthDays.clear();
+                  });
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // Times
+            Text(
+              'Times',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            ..._times.asMap().entries.map((entry) {
+              final index = entry.key;
+              final time = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _selectTime(index),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(time.format(context)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (_times.length > 1)
+                      IconButton(
+                        onPressed: () => _removeTime(index),
+                        icon: const Icon(Icons.remove_circle),
+                      ),
+                  ],
+                ),
+              );
+            }),
+            TextButton.icon(
+              onPressed: _addTime,
+              icon: const Icon(Icons.add),
+              label: const Text('Add Time'),
+            ),
+
+            // Days selection for weekly/monthly
+            if (_scheduleType == ScheduleType.weekly) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Days of Week',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: _weekDays.map((day) {
+                  final isSelected = _selectedDays.contains(day);
+                  return FilterChip(
+                    label: Text(day),
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      setState(() {
+                        if (selected) {
+                          _selectedDays.add(day);
+                        } else {
+                          _selectedDays.remove(day);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+            ],
+
+            if (_scheduleType == ScheduleType.monthly) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Days of Month',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 4,
+                children: List.generate(31, (index) {
+                  final day = index + 1;
+                  final isSelected = _selectedMonthDays.contains(day);
+                  return FilterChip(
+                    label: Text(day.toString()),
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      setState(() {
+                        if (selected) {
+                          _selectedMonthDays.add(day);
+                        } else {
+                          _selectedMonthDays.remove(day);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.habit == null ? 'Add Habit' : 'Edit Habit'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator())
-          else
-            TextButton(
-              onPressed: _saveHabit,
-              child: const Text('SAVE'),
-            ),
-        ],
       ),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(16.0),
           children: [
             TextFormField(
               controller: _nameController,
@@ -176,108 +341,15 @@ class _AddEditHabitScreenState extends State<AddEditHabitScreen> {
                 return null;
               },
             ),
-            const SizedBox(height: 24),
-            Text(
-              'Schedule',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
             const SizedBox(height: 16),
-            DropdownButtonFormField<ScheduleType>(
-              value: _scheduleType,
-              decoration: const InputDecoration(
-                labelText: 'Frequency',
-                border: OutlineInputBorder(),
-              ),
-              items: ScheduleType.values.map((type) {
-                return DropdownMenuItem(
-                  value: type,
-                  child: Text(type.toString().split('.').last.toUpperCase()),
-                );
-              }).toList(),
-              onChanged: (value) {
-                setState(() {
-                  _scheduleType = value!;
-                  _selectedDays.clear();
-                });
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              initialValue: _occurrences.toString(),
-              decoration: InputDecoration(
-                labelText: 'Occurrences per ${_scheduleType.toString().split('.').last}',
-                border: const OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter number of occurrences';
-                }
-                final num = int.tryParse(value);
-                if (num == null || num <= 0) {
-                  return 'Please enter a valid number';
-                }
-                return null;
-              },
-              onChanged: (value) {
-                final num = int.tryParse(value);
-                if (num != null) {
-                  _occurrences = num;
-                }
-              },
-            ),
-            if (_scheduleType != ScheduleType.daily) ...[
-              const SizedBox(height: 16),
-              Text(
-                _scheduleType == ScheduleType.weekly 
-                    ? 'Select Days of Week' 
-                    : 'Select Days of Month',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              _buildDaySelector(),
-            ],
+            _buildScheduleSection(),
             const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Reminder Times',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                IconButton(
-                  onPressed: _addTime,
-                  icon: const Icon(Icons.add_circle),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ..._times.asMap().entries.map((entry) {
-              final index = entry.key;
-              final time = entry.value;
-              return Card(
-                child: ListTile(
-                  title: Text(time.formatted),
-                  trailing: _times.length > 1
-                      ? IconButton(
-                          onPressed: () => _removeTime(index),
-                          icon: const Icon(Icons.remove_circle),
-                        )
-                      : null,
-                  onTap: () => _selectTime(index),
-                ),
-              );
-            }),
-            const SizedBox(height: 24),
-            SwitchListTile(
-              title: const Text('Enable Notifications'),
-              subtitle: const Text('Get reminders for this habit'),
-              value: _alertEnabled,
-              onChanged: (value) {
-                setState(() {
-                  _alertEnabled = value;
-                });
-              },
+            ElevatedButton(
+              onPressed: _isLoading ? null : _saveHabit,
+              child: _isLoading
+                  ? const CircularProgressIndicator()
+                  : Text(
+                      widget.habit == null ? 'Create Habit' : 'Update Habit'),
             ),
           ],
         ),
@@ -285,51 +357,10 @@ class _AddEditHabitScreenState extends State<AddEditHabitScreen> {
     );
   }
 
-  Widget _buildDaySelector() {
-    if (_scheduleType == ScheduleType.weekly) {
-      final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      return Wrap(
-        spacing: 8,
-        children: List.generate(7, (index) {
-          final dayNumber = index + 1;
-          final isSelected = _selectedDays.contains(dayNumber);
-          return FilterChip(
-            label: Text(weekdays[index]),
-            selected: isSelected,
-            onSelected: (selected) {
-              setState(() {
-                if (selected) {
-                  _selectedDays.add(dayNumber);
-                } else {
-                  _selectedDays.remove(dayNumber);
-                }
-              });
-            },
-          );
-        }),
-      );
-    } else {
-      // Monthly - days 1-31
-      return Wrap(
-        spacing: 4,
-        children: List.generate(31, (index) {
-          final dayNumber = index + 1;
-          final isSelected = _selectedDays.contains(dayNumber);
-          return FilterChip(
-            label: Text(dayNumber.toString()),
-            selected: isSelected,
-            onSelected: (selected) {
-              setState(() {
-                if (selected) {
-                  _selectedDays.add(dayNumber);
-                } else {
-                  _selectedDays.remove(dayNumber);
-                }
-              });
-            },
-          );
-        }),
-      );
-    }
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
   }
 }

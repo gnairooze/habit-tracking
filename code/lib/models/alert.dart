@@ -5,16 +5,18 @@ class Alert {
   final String habitDescription;
   final DateTime scheduledDateTime;
   final AlertStatus status;
-  final DateTime? completedDateTime;
+  final DateTime? completedAt;
+  final DateTime createdAt;
 
-  Alert({
+  const Alert({
     this.id,
     required this.habitId,
     required this.habitName,
     required this.habitDescription,
     required this.scheduledDateTime,
     this.status = AlertStatus.pending,
-    this.completedDateTime,
+    this.completedAt,
+    required this.createdAt,
   });
 
   Map<String, dynamic> toMap() {
@@ -24,26 +26,27 @@ class Alert {
       'habit_name': habitName,
       'habit_description': habitDescription,
       'scheduled_date_time': scheduledDateTime.millisecondsSinceEpoch,
-      'status': status.toString().split('.').last,
-      'completed_date_time': completedDateTime?.millisecondsSinceEpoch,
+      'status': status.toString(),
+      'completed_at': completedAt?.millisecondsSinceEpoch,
+      'created_at': createdAt.millisecondsSinceEpoch,
     };
   }
 
-  factory Alert.fromMap(Map<String, dynamic> map) {
-    final status = AlertStatus.values.firstWhere(
-      (e) => e.toString().split('.').last == map['status'],
-    );
-
+  static Alert fromMap(Map<String, dynamic> map) {
     return Alert(
       id: map['id'],
       habitId: map['habit_id'],
       habitName: map['habit_name'],
       habitDescription: map['habit_description'],
-      scheduledDateTime: DateTime.fromMillisecondsSinceEpoch(map['scheduled_date_time']),
-      status: status,
-      completedDateTime: map['completed_date_time'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['completed_date_time'])
+      scheduledDateTime:
+          DateTime.fromMillisecondsSinceEpoch(map['scheduled_date_time']),
+      status: AlertStatus.values.firstWhere(
+        (e) => e.toString() == map['status'],
+      ),
+      completedAt: map['completed_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['completed_at'])
           : null,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at']),
     );
   }
 
@@ -54,7 +57,8 @@ class Alert {
     String? habitDescription,
     DateTime? scheduledDateTime,
     AlertStatus? status,
-    DateTime? completedDateTime,
+    DateTime? completedAt,
+    DateTime? createdAt,
   }) {
     return Alert(
       id: id ?? this.id,
@@ -63,7 +67,8 @@ class Alert {
       habitDescription: habitDescription ?? this.habitDescription,
       scheduledDateTime: scheduledDateTime ?? this.scheduledDateTime,
       status: status ?? this.status,
-      completedDateTime: completedDateTime ?? this.completedDateTime,
+      completedAt: completedAt ?? this.completedAt,
+      createdAt: createdAt ?? this.createdAt,
     );
   }
 }

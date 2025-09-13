@@ -12,11 +12,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
-  
-  static const List<Widget> _screens = <Widget>[
-    HabitsScreen(),
-    AlertsScreen(),
-    ReportsScreen(),
+
+  final List<Widget> _screens = [
+    const HabitsScreen(),
+    const AlertsScreen(),
+    const ReportsScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -30,9 +30,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       body: _screens[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
-        items: const <BottomNavigationBarItem>[
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.list),
+            icon: Icon(Icons.list_alt),
             label: 'Habits',
           ),
           BottomNavigationBarItem(
@@ -40,12 +42,10 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Alerts',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.bar_chart),
+            icon: Icon(Icons.analytics),
             label: 'Reports',
           ),
         ],
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
       ),
     );
   }
